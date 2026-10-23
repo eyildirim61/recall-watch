@@ -1,0 +1,69 @@
+# Daily recall check. Runs only when a product list exists, so the public template stays quiet.
+# Use it from a PRIVATE copy of this repository that contains products/products.csv (or .xlsx).
+name: Recall check
+
+on:
+  schedule:
+    - cron: "17 12 * * *"   # every day at 12:17 UTC (08:17 New York, 15:17 Istanbul)
+  workflow_dispatch:          # "Run workflow" button for a manual check
+
+permissions:
+  contents: write   # save state/seen.json so each recall alerts once
+  issues: write     # open an issue per new match; GitHub emails you about it
+
+concurrency:
+  group: recall-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find the product list
+        id: products
+        run: |
+          for f in products/products.csv products/products.xlsx; do
+            if [ -f "$f" ]; then echo "file=$f" >> "$GITHUB_OUTPUT"; exit 0; fi
+          done
+          echo "No products/products.csv or products/products.xlsx: nothing to check." >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-python@v5
+        if: steps.products.outputs.file != ''
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        if: steps.products.outputs.file != ''
+        run: pip install ".[xlsx]"
+
+      - name: Check recalls
+        if: steps.products.outputs.file != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RECALL_WEBHOOK_URL: ${{ secrets.RECALL_WEBHOOK_URL }}
+        run: >
+          recall-watch check
+          --products "${{ steps.products.outputs.file }}"
+          --ignore-brands-file products/ignore-brands.txt
+          --state state/seen.json
+          --out reports
+          --days 30
+          --github-issues
+
+      - name: Keep the report for 30 days
+        if: always() && steps.products.outputs.file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: recall-report
+          path: reports/
+          retention-days: 30
+
+      - name: Save state
+        if: steps.products.outputs.file != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/seen.json
+          git diff --cached --quiet || (git commit -m "Record reported recalls" && git push)

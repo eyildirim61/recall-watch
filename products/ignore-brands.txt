@@ -1,0 +1,4 @@
+# One brand per line. These brands are skipped for brand matching (barcode matching still works).
+# Add brand names that are also common words, e.g.:
+# Classic
+# Gold
